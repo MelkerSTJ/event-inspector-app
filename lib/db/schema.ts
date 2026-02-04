@@ -1,21 +1,82 @@
-import { pgTable, text, timestamp, uuid, jsonb, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, uuid, jsonb, index, uniqueIndex, primaryKey } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
+import type { AdapterAccount } from 'next-auth/adapters';
 
-// Users-tabell: alla som loggar in
+// NextAuth tables (required by DrizzleAdapter)
 export const users = pgTable('users', {
   id: uuid('id').defaultRandom().primaryKey(),
-  email: text('email').notNull().unique(),
   name: text('name'),
+  email: text('email').notNull().unique(),
+  emailVerified: timestamp('emailVerified', { mode: 'date' }),
   image: text('image'),
-  githubId: text('github_id').unique(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+export const accounts = pgTable(
+  'accounts',
+  {
+    userId: uuid('userId')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    type: text('type').$type<AdapterAccount['type']>().notNull(),
+    provider: text('provider').notNull(),
+    providerAccountId: text('providerAccountId').notNull(),
+    refresh_token: text('refresh_token'),
+    access_token: text('access_token'),
+    expires_at: timestamp('expires_at', { mode: 'date' }),
+    token_type: text('token_type'),
+    scope: text('scope'),
+    id_token: text('id_token'),
+    session_state: text('session_state'),
+  },
+  (account) => ({
+    compoundKey: primaryKey({
+      columns: [account.provider, account.providerAccountId],
+    }),
+  })
+);
+
+export const sessions = pgTable('sessions', {
+  sessionToken: text('sessionToken').notNull().primaryKey(),
+  userId: uuid('userId')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  expires: timestamp('expires', { mode: 'date' }).notNull(),
+});
+
+export const verificationTokens = pgTable(
+  'verification_tokens',
+  {
+    identifier: text('identifier').notNull(),
+    token: text('token').notNull(),
+    expires: timestamp('expires', { mode: 'date' }).notNull(),
+  },
+  (vt) => ({
+    compoundKey: primaryKey({ columns: [vt.identifier, vt.token] }),
+  })
+);
+
+// Relations for NextAuth tables
 export const usersRelations = relations(users, ({ many }) => ({
+  accounts: many(accounts),
+  sessions: many(sessions),
   projects: many(projects),
 }));
 
-// Projects-tabell: varje projekt du skapar (t.ex. "Moteva")
+export const accountsRelations = relations(accounts, ({ one }) => ({
+  user: one(users, {
+    fields: [accounts.userId],
+    references: [users.id],
+  }),
+}));
+
+export const sessionsRelations = relations(sessions, ({ one }) => ({
+  user: one(users, {
+    fields: [sessions.userId],
+    references: [users.id],
+  }),
+}));
+
+// App-specific tables
 export const projects = pgTable('projects', {
   id: uuid('id').defaultRandom().primaryKey(),
   name: text('name').notNull(),
@@ -36,7 +97,6 @@ export const projectsRelations = relations(projects, ({ one, many }) => ({
   environments: many(environments),
 }));
 
-// Environments-tabell: prod, staging, etc.
 export const environments = pgTable('environments', {
   id: uuid('id').defaultRandom().primaryKey(),
   name: text('name').notNull(),
@@ -56,12 +116,11 @@ export const environmentsRelations = relations(environments, ({ one, many }) => 
   events: many(events),
 }));
 
-// API Keys-tabell: hemliga nycklar för varje environment
 export const apiKeys = pgTable('api_keys', {
   id: uuid('id').defaultRandom().primaryKey(),
   name: text('name').notNull(),
-  keyHash: text('key_hash').notNull(), // bcrypt hash (säkert)
-  keyPrefix: text('key_prefix').notNull(), // "ei_abc123..." (visar i UI)
+  keyHash: text('key_hash').notNull(),
+  keyPrefix: text('key_prefix').notNull(),
   environmentId: uuid('environment_id').notNull().references(() => environments.id, { onDelete: 'cascade' }),
   lastUsedAt: timestamp('last_used_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -77,11 +136,10 @@ export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
   }),
 }));
 
-// Events-tabell: varje klick, submit, etc. från sajten
 export const events = pgTable('events', {
   id: uuid('id').defaultRandom().primaryKey(),
   eventName: text('event_name').notNull(),
-  payload: jsonb('payload'), // JSON-data från eventet
+  payload: jsonb('payload'),
   url: text('url'),
   referrer: text('referrer'),
   userAgent: text('user_agent'),
